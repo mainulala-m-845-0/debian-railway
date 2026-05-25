@@ -45,7 +45,6 @@ EOF
 # Create startup script with sshx integration and auto-redirect
 RUN cat > /usr/local/bin/start-session.sh << 'EOF'
 #!/bin/bash
-set -e
 
 REDIRECT_PORT=8000
 SSHX_URL_FILE="/tmp/sshx_url.txt"
@@ -68,7 +67,7 @@ class RedirectHandler(http.server.SimpleHTTPRequestHandler):
             if os.path.exists(url_file):
                 with open(url_file, 'r') as f:
                     sshx_url = f.read().strip()
-                if sshx_url:
+                if sshx_url and sshx_url.startswith('http'):
                     self.send_response(301)
                     self.send_header('Location', sshx_url)
                     self.end_headers()
@@ -76,10 +75,10 @@ class RedirectHandler(http.server.SimpleHTTPRequestHandler):
         except:
             pass
         
-        self.send_response(503)
-        self.send_header('Content-type', 'text/plain')
+        # Fallback to ttyd on port 7681
+        self.send_response(301)
+        self.send_header('Location', 'http://localhost:7681')
         self.end_headers()
-        self.wfile.write(b'sshx session not ready - redirecting to terminal on port 7681')
     
     def log_message(self, format, *args):
         pass
@@ -90,39 +89,54 @@ with socketserver.TCPServer(("", port), RedirectHandler) as httpd:
 PYTHON_EOF
 }
 
-# Clean up old URL file
-rm -f "$SSHX_URL_FILE"
+# Initialize sshx in background
+initialize_sshx() {
+    rm -f "$SSHX_URL_FILE"
+    
+    # Install sshx if not present
+    if ! command -v sshx &> /dev/null; then
+        echo "Installing sshx..."
+        curl -sSf https://sshx.io/get | sh 2>&1 | grep -E "Done|Error" || true
+    fi
+    
+    # Run sshx with stdin from /dev/null to avoid blocking
+    # Wait a bit for sshx server to initialize
+    sleep 2
+    echo "Initializing sshx session..."
+    echo | timeout 10 sshx run 2>&1 | tee /tmp/sshx_output.txt &
+    
+    # Extract URL asynchronously
+    for i in {1..20}; do
+        sleep 1
+        if grep -q "Link:" /tmp/sshx_output.txt 2>/dev/null; then
+            SSHX_URL=$(grep "Link:" /tmp/sshx_output.txt | head -1 | grep -oP 'https://[^\s]+' || true)
+            if [ -n "$SSHX_URL" ]; then
+                echo "$SSHX_URL" > "$SSHX_URL_FILE"
+                echo "✓ sshx session available: $SSHX_URL"
+                return 0
+            fi
+        fi
+    done
+    
+    echo "⚠ sshx session not available, ttyd fallback active on port 7681"
+    return 1
+}
+
+# Clean up old files
+rm -f "$SSHX_URL_FILE" /tmp/sshx_output.txt
 
 # Start redirect server in background
 export REDIRECT_PORT=$REDIRECT_PORT
 export SSHX_URL_FILE=$SSHX_URL_FILE
 create_redirect_server &
 REDIRECT_PID=$!
-echo "✓ Redirect server started (PID: $REDIRECT_PID) on port $REDIRECT_PORT"
+echo "✓ Redirect server started on port $REDIRECT_PORT"
 
-# Install sshx if not present
-if ! command -v sshx &> /dev/null; then
-    echo "Installing sshx..."
-    curl -sSf https://sshx.io/get | sh
-fi
+# Initialize sshx in background (non-blocking)
+initialize_sshx &
+SSHX_PID=$!
 
-# Start sshx and capture URL with timeout
-echo "Starting sshx session..."
-timeout 15 sshx run > "$SSHX_URL_FILE" 2>&1 || true
-
-# Extract and display sshx URL if available
-if [ -f "$SSHX_URL_FILE" ]; then
-    SSHX_URL=$(grep -oP "Link:\s+\K.*" "$SSHX_URL_FILE" | head -1 || true)
-    if [ -n "$SSHX_URL" ]; then
-        echo "$SSHX_URL" > "$SSHX_URL_FILE"
-        echo "✓ sshx session available at: $SSHX_URL"
-    else
-        echo "⚠ sshx session not available, falling back to ttyd on port 7681"
-        rm -f "$SSHX_URL_FILE"
-    fi
-fi
-
-# Start ttyd
+# Start ttyd immediately
 echo "Starting ttyd on port ${PORT}..."
 exec /bin/ttyd -p ${PORT} -c ${USERNAME}:${PASSWORD} /bin/bash
 EOF
