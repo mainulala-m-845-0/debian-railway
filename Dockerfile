@@ -101,7 +101,7 @@ fi
 exec /bin/ttyd -p ${PORT} -c ${USERNAME}:${PASSWORD} /bin/bash
 EOF
 
-chmod +x /usr/local/bin/start-session.sh
+RUN chmod +x /usr/local/bin/start-session.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
