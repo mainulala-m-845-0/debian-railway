@@ -48,7 +48,7 @@ RUN cat > /usr/local/bin/start-session.sh << 'EOF'
 set -e
 
 SSHX_URL=""
-REDIRECT_PORT=8080
+REDIRECT_PORT=8000
 
 # Function to create redirect server
 create_redirect_server() {
@@ -60,7 +60,7 @@ import sys
 from urllib.parse import quote
 
 sshx_url = os.environ.get('SSHX_URL', '')
-port = int(os.environ.get('REDIRECT_PORT', 8080))
+port = int(os.environ.get('REDIRECT_PORT', 8000))
 
 class RedirectHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -107,6 +107,6 @@ RUN chmod +x /usr/local/bin/start-session.sh
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD /bin/ttyd --version || exit 1
 
-EXPOSE ${PORT} 8080
+EXPOSE ${PORT} 8000
 
 CMD ["/usr/local/bin/start-session.sh"]
